@@ -1,0 +1,18 @@
+{
+  "benchmark_date": "2026-10-28T14:04:13.622558+00:00",
+  "total_test_scenarios": 60,
+  "metrics": {
+    "time_to_capacity_mae_days": 0.0,
+    "time_to_capacity_rmse_days": 0.0,
+    "false_positive_rate_stable_demand_pct": 0.0,
+    "false_positive_rate_declining_demand_pct": 0.0,
+    "missed_alert_rate_overloaded_pct": 0.0,
+    "regime_shift_detection_sensitivity_pct": 90.0
+  },
+  "methodology": {
+    "forecasting_baseline": "Ordinary Least Squares (OLS) with 95% Confidence Bounds",
+    "regime_detection": "Recent window vs baseline slope/mean divergence check",
+    "false_alarm_damping": "Strict slope polarity check (slope <= 0 suppresses exhaustion claims)",
+    "data_source": "Deterministic synthetic telemetry with configurable random seed"
+  }
+}

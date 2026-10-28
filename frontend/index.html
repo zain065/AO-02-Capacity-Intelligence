@@ -1,0 +1,532 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AO-02 Data Centre Capacity Intelligence</title>
+  <meta name="description" content="AI-driven predictive capacity intelligence, thermal monitoring, and proactive exhaustion forecasting for data centre infrastructure.">
+  <!-- Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <!-- Chart.js for transparent time-series and confidence band visualization -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.2/dist/chart.umd.min.js"></script>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <!-- System Notification Bar / Synthetic Data Banner -->
+  <aside class="data-source-banner" id="dataSourceBanner">
+    <div class="banner-content">
+      <span class="badge-synthetic" id="dataSourceNoticeBadge">SYNTHETIC TELEMETRY</span>
+      <span class="banner-text">Data is deterministically generated for reproducible hackathon demonstration and testing. Never presented as real operational records.</span>
+    </div>
+    <div class="banner-controls">
+      <label for="facilitySelect" class="facility-label">FACILITY:</label>
+      <select id="facilitySelect" class="facility-select" aria-label="Select Monitored Data Centre Facility">
+        <option value="DC-NORTH-PRIMARY" selected>DC-NORTH-PRIMARY (Ashburn, VA)</option>
+        <option value="DC-SOUTH-SECONDARY">DC-SOUTH-SECONDARY (Dallas, TX)</option>
+      </select>
+    </div>
+  </aside>
+
+  <!-- Application Shell -->
+  <div class="app-layout">
+    <!-- Top Navigation Header -->
+    <header class="app-header">
+      <div class="header-brand">
+        <div class="brand-icon">⚡</div>
+        <div class="brand-titles">
+          <h1 class="brand-title">AO-02 Capacity Intelligence</h1>
+          <p class="brand-subtitle">Predictive Exhaustion Forecasting & Infrastructure Headroom</p>
+        </div>
+      </div>
+
+      <div class="header-actions">
+        <div class="status-indicator-pill" id="globalHealthPill">
+          <span class="pulsing-dot" id="globalHealthDot"></span>
+          <span id="globalHealthText">ANALYZING STATUS...</span>
+        </div>
+        <button id="importCsvBtn" class="btn btn-primary" title="Import telemetry CSV with validation">
+          <span class="btn-icon">📁</span> Ingest CSV
+        </button>
+        <button id="refreshBtn" class="btn btn-secondary" title="Fetch fresh telemetry and forecasts">
+          <span class="btn-icon">↻</span> Refresh
+        </button>
+      </div>
+    </header>
+
+    <!-- Main Content Area -->
+    <main class="main-container">
+      
+      <!-- KPI Overview Cards -->
+      <section class="kpi-grid" aria-label="Key Performance Indicators">
+        <div class="kpi-card" id="kpiResourcesCard">
+          <div class="kpi-label">MONITORED RESOURCES</div>
+          <div class="kpi-value" id="kpiResourcesCount">5</div>
+          <div class="kpi-subtext">Power, Cooling, Storage, Network, VMs</div>
+        </div>
+
+        <div class="kpi-card highlight-danger" id="kpiEarliestCrunchCard">
+          <div class="kpi-label">EARLIEST CAPACITY CRUNCH</div>
+          <div class="kpi-value" id="kpiEarliestCrunchName">--</div>
+          <div class="kpi-subtext" id="kpiEarliestCrunchDays">Estimating time to capacity...</div>
+        </div>
+
+        <div class="kpi-card" id="kpiActiveAlertsCard">
+          <div class="kpi-label">ACTIVE ALERTS</div>
+          <div class="kpi-value" id="kpiActiveAlertsCount">0</div>
+          <div class="kpi-subtext" id="kpiAlertBreakdown">0 Critical · 0 Warning</div>
+        </div>
+
+        <div class="kpi-card" id="kpiDataPointsCard">
+          <div class="kpi-label">INGESTED OBSERVATIONS</div>
+          <div class="kpi-value" id="kpiDataPointsCount">--</div>
+          <div class="kpi-subtext">30-day continuous rolling window</div>
+        </div>
+      </section>
+
+      <!-- 5 Resource Headroom Cards -->
+      <section class="section-container" aria-label="Monitored Resources">
+        <div class="section-header">
+          <div>
+            <h2 class="section-title">Resource Headroom & Status</h2>
+            <p class="section-desc">Current utilization, rated limits, and estimated days until capacity exhaustion.</p>
+          </div>
+          <div class="legend-container">
+            <span class="legend-item"><span class="legend-dot normal"></span> Normal (&lt;80%)</span>
+            <span class="legend-item"><span class="legend-dot warning"></span> Warning (80-90%)</span>
+            <span class="legend-item"><span class="legend-dot critical"></span> Critical (&gt;90%)</span>
+          </div>
+        </div>
+
+        <div class="resources-grid" id="resourcesGrid">
+          <!-- Populated dynamically by script.js -->
+          <div class="card skeleton-card">Loading resource telemetry...</div>
+        </div>
+      </section>
+
+      <!-- Interactive Deep-Dive Forecasting & Historical Chart -->
+      <section class="section-container chart-section" aria-label="Forecasting Engine Deep Dive">
+        <div class="section-header">
+          <div>
+            <h2 class="section-title">Predictive Capacity Trajectory & Uncertainty</h2>
+            <p class="section-desc">Historical utilization with ordinary least squares trend extrapolation and 95% confidence intervals.</p>
+          </div>
+
+          <div class="controls-row">
+            <!-- Resource Tab Selector -->
+            <div class="tab-group" id="resourceTabs" role="tablist">
+              <button class="tab-btn active" data-resource="storage" id="tabStorage" role="tab">Storage</button>
+              <button class="tab-btn" data-resource="power" id="tabPower" role="tab">Power</button>
+              <button class="tab-btn" data-resource="cooling" id="tabCooling" role="tab">Cooling</button>
+              <button class="tab-btn" data-resource="network" id="tabNetwork" role="tab">Network</button>
+              <button class="tab-btn" data-resource="vm" id="tabVm" role="tab">VM Inventory</button>
+            </div>
+
+            <!-- Asset Drilldown Selector -->
+            <div class="horizon-group">
+              <label for="assetSelect" class="control-label">Asset Scope:</label>
+              <select id="assetSelect" class="form-select">
+                <option value="" selected>Facility Aggregate</option>
+              </select>
+            </div>
+
+            <!-- Forecast Horizon Selector -->
+            <div class="horizon-group">
+              <label for="horizonSelect" class="control-label">Horizon:</label>
+              <select id="horizonSelect" class="form-select">
+                <option value="14">14 Days</option>
+                <option value="30" selected>30 Days</option>
+                <option value="60">60 Days</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <!-- Chart and Model Explainability Container -->
+        <div class="forecast-layout">
+          <!-- Chart Canvas Panel -->
+          <div class="chart-panel">
+            <div class="chart-wrapper">
+              <canvas id="forecastChart" aria-label="Capacity Forecast Chart"></canvas>
+            </div>
+            <div class="chart-legend-custom">
+              <span class="chart-key"><span class="key-color history"></span> Historical Telemetry</span>
+              <span class="chart-key"><span class="key-color trend"></span> Projected Trajectory</span>
+              <span class="chart-key"><span class="key-color confidence"></span> 95% Uncertainty Band</span>
+              <span class="chart-key"><span class="key-color limit"></span> Rated Capacity Threshold</span>
+            </div>
+          </div>
+
+          <!-- Explainability & Model Decision Sidebar -->
+          <div class="explainability-panel" id="explainabilityPanel">
+            <h3 class="panel-heading">Model Decision & Assumptions</h3>
+
+            <!-- Regime Shift Banner (Dynamic) -->
+            <div class="regime-alert hidden" id="regimeAlertBox">
+              <span class="regime-icon">⚠️</span>
+              <div id="regimeAlertText">Regime shift detected in recent telemetry.</div>
+            </div>
+
+            <div class="metric-row">
+              <span class="metric-label">Model Status:</span>
+              <span class="status-pill normal" id="modelStatusPill">NORMAL</span>
+            </div>
+
+            <div class="metric-row">
+              <span class="metric-label">Rate of Change:</span>
+              <span class="metric-val" id="modelSlopeVal">+0.00 / day</span>
+            </div>
+
+            <div class="metric-row">
+              <span class="metric-label">Days to Capacity:</span>
+              <span class="metric-val highlight" id="modelDaysVal">Indefinite</span>
+            </div>
+
+            <div class="metric-row">
+              <span class="metric-label">95% Exhaustion Window:</span>
+              <span class="metric-val highlight" id="modelUncertaintyWindowVal">±0.0 days</span>
+            </div>
+
+            <div class="metric-row" id="modelExhaustionDatesRow">
+              <span class="metric-label">Exhaustion Window:</span>
+              <span class="metric-val" id="modelExhaustionRangeVal" style="font-size:0.75rem;max-width:160px;text-align:right;">--</span>
+            </div>
+
+            <div class="metric-row">
+              <span class="metric-label">Model Confidence:</span>
+              <span class="metric-val" id="modelConfidenceVal">90%</span>
+            </div>
+
+            <div class="decision-reason-box">
+              <div class="box-title">Operator Explanation:</div>
+              <p class="box-text" id="modelReasonText">Loading model explanation...</p>
+            </div>
+
+            <div class="assumptions-box">
+              <div class="box-title">Model Assumptions:</div>
+              <ul class="assumptions-list" id="modelAssumptionsList">
+                <li>Awaiting forecast calculation...</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Capacity Planning & Procurement Lead Times Section -->
+      <section class="section-container" aria-label="Capacity Planning & Procurement">
+        <div class="section-header">
+          <div>
+            <h2 class="section-title">Capacity Planning & Procurement Lead Times</h2>
+            <p class="section-desc">Compares exhaustion projections against hardware procurement lead times to identify overdue expansion orders.</p>
+          </div>
+          <div class="lead-time-summary-pill" id="planningSummaryPill">
+            <span id="planningSummaryText">Calculating lead times...</span>
+          </div>
+        </div>
+
+        <div class="planning-grid" id="planningGrid">
+          <div class="card skeleton-card">Evaluating procurement schedules...</div>
+        </div>
+      </section>
+
+      <!-- Interactive What-If Scenario Simulator Section -->
+      <section class="section-container simulation-section" aria-label="What-If Scenario Simulator">
+        <div class="section-header">
+          <div>
+            <h2 class="section-title">Interactive What-If Scenario Simulator</h2>
+            <p class="section-desc">Hypothetically model accelerated demand, sudden workload additions, or hardware expansions. <strong style="color:var(--color-cyan);">Telemetry & production state are strictly unmodified.</strong></p>
+          </div>
+          <span class="simulation-badge">READ-ONLY SIMULATION</span>
+        </div>
+
+        <div class="simulator-layout">
+          <!-- Simulation Control Form -->
+          <form id="simulatorForm" class="simulator-controls-panel" onsubmit="return false;">
+            <div class="sim-form-group">
+              <label for="simResourceSelect" class="sim-label">Target Resource:</label>
+              <select id="simResourceSelect" class="form-select w-100">
+                <option value="storage">Storage (TB)</option>
+                <option value="power">Power Load (kW)</option>
+                <option value="cooling">Cooling / Thermal (°C)</option>
+                <option value="network">Network Uplink (Gbps)</option>
+                <option value="vm">VM Inventory (VMs)</option>
+              </select>
+            </div>
+
+            <div class="sim-form-group">
+              <div class="sim-label-row">
+                <label for="simGrowthMultiplier" class="sim-label">Demand Growth Multiplier:</label>
+                <span class="sim-val-display" id="simGrowthDisplay">1.5x (+50%)</span>
+              </div>
+              <input type="range" id="simGrowthMultiplier" min="-0.5" max="3.0" step="0.1" value="1.5" class="sim-slider">
+              <div class="slider-marks">
+                <span>-0.5x (Drop)</span>
+                <span>1.0x (Current)</span>
+                <span>2.0x (Surge)</span>
+                <span>3.0x (Peak)</span>
+              </div>
+            </div>
+
+            <div class="sim-form-group">
+              <label for="simWorkloadDelta" class="sim-label">Simulate Workload Addition:</label>
+              <div class="input-with-unit">
+                <input type="number" id="simWorkloadDelta" value="150" step="10" class="sim-input">
+                <span class="input-unit" id="simWorkloadUnit">TB</span>
+              </div>
+              <span class="input-hint">E.g., +150 TB migration or new cluster</span>
+            </div>
+
+            <div class="sim-form-group">
+              <label for="simCapacityAdjustment" class="sim-label">Simulate Capacity Expansion (Hardware Upgrade):</label>
+              <div class="input-with-unit">
+                <input type="number" id="simCapacityAdjustment" value="0" step="50" class="sim-input">
+                <span class="input-unit" id="simCapacityUnit">TB</span>
+              </div>
+              <span class="input-hint">E.g., +500 TB expansion shelf</span>
+            </div>
+
+            <button id="runSimulationBtn" class="btn btn-primary w-100">
+              <span class="btn-icon">⚡</span> Run Hypothetical Simulation
+            </button>
+          </form>
+
+          <!-- Simulation Result Display Panel -->
+          <div class="simulator-result-panel" id="simulatorResultPanel">
+            <div class="sim-notice-banner" id="simNoticeBanner">
+              <span class="sim-icon">🧪</span>
+              <span>WHAT-IF HYPOTHETICAL SIMULATION — Telemetry & production state are strictly unmodified.</span>
+            </div>
+
+            <div class="sim-comparison-cards">
+              <div class="sim-metric-card baseline">
+                <span class="sim-card-title">BASELINE REALITY</span>
+                <div class="sim-metric-val" id="simBaseDays">Loading...</div>
+                <span class="sim-metric-sub" id="simBaseSlope">Current Trajectory</span>
+              </div>
+
+              <div class="sim-arrow">➔</div>
+
+              <div class="sim-metric-card simulated" id="simResultCard">
+                <span class="sim-card-title">SIMULATED SCENARIO</span>
+                <div class="sim-metric-val highlight" id="simNewDays">Loading...</div>
+                <span class="sim-metric-sub" id="simNewSlope">Hypothetical Trajectory</span>
+              </div>
+            </div>
+
+            <div class="sim-impact-box" id="simImpactBox">
+              <div class="impact-headline" id="simImpactHeadline">Scenario Impact</div>
+              <p class="impact-desc" id="simImpactDesc">Click "Run Hypothetical Simulation" to test capacity impact.</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Actionable Operational Recommendations Section -->
+      <section class="section-container" aria-label="Actionable Recommendations">
+        <div class="section-header">
+          <div>
+            <h2 class="section-title">Actionable Advisory Recommendations</h2>
+            <p class="section-desc">Prioritized operator guidance based on utilization trajectories, procurement lead times, and thermal boundaries.</p>
+          </div>
+          <span class="advisory-badge">OPERATOR ADVISORY ONLY · NO AUTO-CONTROL</span>
+        </div>
+
+        <div class="recommendations-list" id="recommendationsList">
+          <div class="card skeleton-card">Generating advisory recommendations...</div>
+        </div>
+      </section>
+
+      <!-- Multi-Tenant Attribution & Isolation Section -->
+      <section class="section-container" aria-label="Tenant Resource Attribution">
+        <div class="section-header">
+          <div>
+            <h2 class="section-title">Tenant & Workload Resource Attribution</h2>
+            <p class="section-desc">Monitors tenant quota utilization and validates strict cross-tenant access control.</p>
+          </div>
+
+          <!-- Role / Tenant Simulator -->
+          <div class="tenant-sim-controls">
+            <label for="tenantRoleSelector" class="control-label">Security Role:</label>
+            <select id="tenantRoleSelector" class="form-select">
+              <option value="admin">Admin / Infrastructure Operator</option>
+              <option value="tenant-alpha">Simulate Tenant Alpha (analytics_pipeline)</option>
+              <option value="tenant-beta">Simulate Tenant Beta (core_transact_db)</option>
+              <option value="tenant-gamma">Simulate Tenant Gamma (web_api_cluster)</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="tenants-grid" id="tenantsGrid">
+          <!-- Populated dynamically by script.js -->
+          <div class="card skeleton-card">Loading tenant attribution...</div>
+        </div>
+      </section>
+
+      <!-- Empirical Out-of-Sample Model Validation & Backtest Section -->
+      <section class="section-container evaluation-section" aria-label="Forecast Accuracy & Backtest Evaluation">
+        <div class="section-header">
+          <div>
+            <h2 class="section-title">Empirical Forecast Accuracy & Backtest Verification</h2>
+            <p class="section-desc">Walk-forward temporal train/test split (70% train, 30% test across 3,600 observations). Out-of-sample prediction intervals and naive persistence comparison.</p>
+          </div>
+          <span class="evaluation-badge">WALK-FORWARD TEMPORAL BACKTEST (70/30)</span>
+        </div>
+
+        <div class="evaluation-kpi-row">
+          <div class="eval-stat-card">
+            <span class="eval-stat-label">TOTAL OBSERVATIONS</span>
+            <span class="eval-stat-value" id="evalTotalSamples">3,600</span>
+            <span class="eval-stat-sub" id="evalSplitDesc">2,515 Train · 1,085 Test</span>
+          </div>
+
+          <div class="eval-stat-card">
+            <span class="eval-stat-label">EMPIRICAL 95% COVERAGE</span>
+            <span class="eval-stat-value highlight-cyan" id="evalCoverageVal">97.7%</span>
+            <span class="eval-stat-sub">Target ≥ 95.0% (Well-calibrated)</span>
+          </div>
+
+          <div class="eval-stat-card">
+            <span class="eval-stat-label">OVERALL TEST MAE</span>
+            <span class="eval-stat-value" id="evalOverallMae">22.3</span>
+            <span class="eval-stat-sub">RMSE: 31.8</span>
+          </div>
+
+          <div class="eval-stat-card highlight-success">
+            <span class="eval-stat-label">ERROR REDUCTION VS NAIVE</span>
+            <span class="eval-stat-value" id="evalNaiveImprovement">+20.5%</span>
+            <span class="eval-stat-sub">Up to +47.6% on SAN Storage & VMs</span>
+          </div>
+        </div>
+
+        <div class="eval-table-container">
+          <table class="eval-table" id="evalDetailsTable">
+            <thead>
+              <tr>
+                <th>Resource Monitored</th>
+                <th>Train / Test Split</th>
+                <th>Model MAE</th>
+                <th>Model RMSE</th>
+                <th>Empirical 95% Coverage</th>
+                <th>Naive Baseline MAE</th>
+                <th>Accuracy Gain vs Naive</th>
+              </tr>
+            </thead>
+            <tbody id="evalTableBody">
+              <!-- Populated by script.js -->
+              <tr><td colspan="7" style="text-align:center;padding:16px;">Loading out-of-sample backtest metrics...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- Active Alerts & Audit Trail Row -->
+      <div class="bottom-grid">
+        <!-- Active Alerts Panel -->
+        <section class="section-container" aria-label="Active Alerts">
+          <div class="section-header">
+            <div>
+              <h2 class="section-title">Active Capacity Alerts</h2>
+              <p class="section-desc">Actionable threshold warnings with hysteresis damping.</p>
+            </div>
+          </div>
+
+          <div class="alerts-list" id="alertsList">
+            <!-- Populated dynamically -->
+            <div class="empty-state">No active capacity alerts. All systems within safe operating thresholds.</div>
+          </div>
+        </section>
+
+        <!-- Audit Trail Panel -->
+        <section class="section-container" aria-label="Read-Only Audit Trail">
+          <div class="section-header">
+            <div>
+              <h2 class="section-title">Audit Trail</h2>
+              <p class="section-desc">Read-only event log of forecast runs, access checks, and alert evaluations.</p>
+            </div>
+          </div>
+
+          <div class="audit-list" id="auditList">
+            <!-- Populated dynamically -->
+            <div class="empty-state">Loading audit events...</div>
+          </div>
+        </section>
+      </div>
+
+    </main>
+
+    <!-- Footer -->
+    <footer class="app-footer">
+      <div class="footer-left">
+        <span>AO-02 Data Centre Capacity Intelligence</span>
+        <span class="footer-sep">·</span>
+        <span>Deterministic Synthetic Telemetry Baseline</span>
+      </div>
+      <div class="footer-right">
+        <a href="/docs" target="_blank" class="footer-link">API Swagger Documentation (/docs)</a>
+        <span class="footer-sep">·</span>
+        <span class="readonly-badge">READ-ONLY MONITORING</span>
+      </div>
+    </footer>
+  </div>
+
+  <!-- CSV Ingestion Modal Dialog -->
+  <dialog id="csvModal" class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <div class="modal-title-row">
+          <span class="modal-icon">📁</span>
+          <h2 class="modal-title">Import Historical Telemetry CSV</h2>
+        </div>
+        <button id="closeCsvModalBtn" class="modal-close-btn" aria-label="Close dialog">&times;</button>
+      </div>
+
+      <p class="modal-desc">
+        Upload time-series telemetry to be persisted into SQLite storage. Supports ISO-8601, SQL, and Unix timestamps with automatic unit normalization and deduplication.
+      </p>
+
+      <form id="csvUploadForm" onsubmit="return false;">
+        <div class="form-group">
+          <label for="csvFacilitySelect" class="form-label">Target Facility:</label>
+          <select id="csvFacilitySelect" class="form-select w-100">
+            <option value="DC-NORTH-PRIMARY">DC-NORTH-PRIMARY (Ashburn, VA)</option>
+            <option value="DC-SOUTH-SECONDARY">DC-SOUTH-SECONDARY (Dallas, TX)</option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label for="csvFileInput" class="form-label">Telemetry CSV File (Max 10MB):</label>
+          <div class="file-drop-area" id="csvDropZone">
+            <span class="drop-icon">📄</span>
+            <span class="drop-text" id="csvFileNameDisplay">Click to browse or drop CSV here</span>
+            <input type="file" id="csvFileInput" accept=".csv,text/csv" class="file-input-hidden">
+          </div>
+          <span class="input-hint">Expected columns: timestamp, resource_type, value, capacity, unit (optional: asset_id, tenant_id)</span>
+        </div>
+
+        <div class="modal-actions">
+          <button type="button" id="cancelCsvBtn" class="btn btn-secondary">Cancel</button>
+          <button type="button" id="submitCsvBtn" class="btn btn-primary">
+            <span class="btn-icon">⚡</span> Validate & Ingest
+          </button>
+        </div>
+      </form>
+
+      <!-- Line-numbered Validation & Ingestion Results -->
+      <div id="csvResultsContainer" class="csv-results-panel hidden">
+        <div class="csv-results-header" id="csvResultsHeader">Ingestion Summary</div>
+        <div class="csv-stats-pills" id="csvStatsPills"></div>
+        <div class="csv-errors-box hidden" id="csvErrorsBox">
+          <div class="errors-title">Line-Numbered Validation Errors:</div>
+          <ul class="errors-list" id="csvErrorsList"></ul>
+        </div>
+      </div>
+    </div>
+  </dialog>
+
+  <!-- Toast Notification Container -->
+  <div id="toastContainer" class="toast-container" aria-live="polite"></div>
+
+  <script src="script.js"></script>
+</body>
+</html>

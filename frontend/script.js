@@ -21,16 +21,18 @@ const state = {
   activeRole: "admin",
   chartInstance: null,
   cachedOverview: null,
-  isRefreshing: false
+  isRefreshing: false,
+  resourceTrends: {},
+  trendFacility: ""
 };
 
 // Resource metadata for visual rendering
 const RESOURCE_META = {
-  power: { name: "Power Load", icon: "⚡", unit: "kW", capacity: 500 },
-  cooling: { name: "Thermal / Cooling", icon: "❄️", unit: "°C", capacity: 35 },
-  storage: { name: "Storage SAN", icon: "💾", unit: "TB", capacity: 2000 },
-  network: { name: "Network Uplink", icon: "🌐", unit: "Gbps", capacity: 100 },
-  vm: { name: "Host VM Slots", icon: "🖥️", unit: "VMs", capacity: 1200 }
+  power: { name: "Power", icon: "⚡", unit: "kW", capacity: 500 },
+  cooling: { name: "Cooling", icon: "❄️", unit: "°C", capacity: 35 },
+  storage: { name: "Storage", icon: "💾", unit: "TB", capacity: 2000 },
+  network: { name: "Internet connection", icon: "🌐", unit: "Gbps", capacity: 100 },
+  vm: { name: "Computer spaces", icon: "🖥️", unit: "VMs", capacity: 1200 }
 };
 
 // --------------------------------------------------------------------------
@@ -78,6 +80,8 @@ function setupEventListeners() {
     facilitySelect.addEventListener("change", async (e) => {
       state.activeFacility = e.target.value;
       state.activeAsset = "";
+      state.trendFacility = "";
+      state.resourceTrends = {};
       await loadFacilityAssets();
       loadAllDashboardData();
     });
@@ -119,7 +123,7 @@ function setupEventListeners() {
       if (e.target.files && e.target.files[0]) {
         csvFileNameDisplay.textContent = e.target.files[0].name + ` (${(e.target.files[0].size / 1024).toFixed(1)} KB)`;
       } else {
-        csvFileNameDisplay.textContent = "Click to browse or drop CSV here";
+        csvFileNameDisplay.textContent = "Choose a file or drop it here";
       }
     });
   }
@@ -131,7 +135,7 @@ function setupEventListeners() {
   const refreshBtn = document.getElementById("refreshBtn");
   if (refreshBtn) {
     refreshBtn.addEventListener("click", () => {
-      showToast("Syncing with Capacity Intelligence API...", "info");
+      showToast("Checking for new readings...", "info");
       loadAllDashboardData();
     });
   }
@@ -175,7 +179,11 @@ function setupEventListeners() {
     simGrowthSlider.addEventListener("input", (e) => {
       const val = parseFloat(e.target.value);
       const pct = Math.round((val - 1.0) * 100);
-      simGrowthDisplay.textContent = `${val.toFixed(1)}x (${pct >= 0 ? "+" : ""}${pct}%)`;
+      simGrowthDisplay.textContent = pct > 0
+        ? `${pct}% faster`
+        : pct < 0
+          ? `${Math.abs(pct)}% slower`
+          : "No change";
     });
   }
 
@@ -221,7 +229,7 @@ async function loadAllDashboardData() {
     ]);
   } catch (err) {
     console.error("Dashboard synchronization error:", err);
-    showToast("Unable to reach Capacity Intelligence API. Verify backend is running.", "error");
+    showToast("Could not connect. Check that the app is running and try again.", "error");
   } finally {
     state.isRefreshing = false;
   }
@@ -257,8 +265,13 @@ async function loadOverview() {
   const healthDot = document.getElementById("globalHealthDot");
   const healthText = document.getElementById("globalHealthText");
   if (healthDot && healthText) {
-    healthDot.className = "pulsing-dot " + (data.overall_health || "normal");
-    healthText.textContent = `STATUS: ${(data.overall_health || "NORMAL").toUpperCase()}`;
+    const health = String(data.overall_health || "normal").toLowerCase();
+    healthDot.className = `pulsing-dot ${health}`;
+    healthText.textContent = {
+      normal: "Everything looks good",
+      warning: "Some things are getting full",
+      critical: "Some things need attention"
+    }[health] || "Checking system...";
   }
 
   // Earliest Crunch KPI
@@ -268,10 +281,10 @@ async function loadOverview() {
     if (data.earliest_capacity_crunch && data.days_to_earliest_crunch !== null) {
       const meta = RESOURCE_META[data.earliest_capacity_crunch] || { name: data.earliest_capacity_crunch };
       earliestName.textContent = meta.name;
-      earliestDays.textContent = `~${data.days_to_earliest_crunch.toFixed(0)} days to capacity threshold`;
+      earliestDays.textContent = `About ${data.days_to_earliest_crunch.toFixed(0)} days until it gets too full`;
     } else {
-      earliestName.textContent = "Safe Headroom";
-      earliestDays.textContent = "No impending capacity crunch projected";
+      earliestName.textContent = "Nothing yet";
+      earliestDays.textContent = "No resource is expected to fill up soon";
     }
   }
 
@@ -281,11 +294,72 @@ async function loadOverview() {
   if (activeAlertsEl && alertBreakdownEl) {
     const totalAlerts = data.critical_alerts_count + data.warning_alerts_count;
     activeAlertsEl.textContent = totalAlerts;
-    alertBreakdownEl.textContent = `${data.critical_alerts_count} Critical · ${data.warning_alerts_count} Warning`;
+    alertBreakdownEl.textContent = `${data.critical_alerts_count} urgent · ${data.warning_alerts_count} getting full`;
   }
 
   // Render 5 Resource Cards
   renderResourceCards(data.resources);
+  renderResourceTable(data.resources);
+  loadResourceTrends();
+}
+
+async function loadResourceTrends() {
+  const facilityId = state.activeFacility;
+  if (state.trendFacility === facilityId) return;
+  state.trendFacility = facilityId;
+  state.resourceTrends = {};
+
+  const trends = await Promise.all(Object.keys(RESOURCE_META).map(async resourceType => {
+    const url = `/api/v1/resources/${resourceType}/history?facility_id=${encodeURIComponent(facilityId)}&limit=24`;
+    try {
+      const response = await apiFetch(url);
+      if (!response.ok) throw new Error(`History request failed for ${resourceType}`);
+      const history = await response.json();
+      return [resourceType, Array.isArray(history) ? history : []];
+    } catch (err) {
+      console.warn(`Unable to load ${resourceType} trend:`, err);
+      return [resourceType, null];
+    }
+  }));
+
+  if (facilityId !== state.activeFacility) return;
+  state.resourceTrends = Object.fromEntries(trends);
+  if (trends.some(([, history]) => history === null)) state.trendFacility = "";
+  if (state.cachedOverview) renderResourceCards(state.cachedOverview.resources);
+}
+
+function createSparkline(resourceType, statusClass) {
+  const history = state.resourceTrends[resourceType];
+  if (!Array.isArray(history) || history.length < 2) {
+    return `<div class="resource-sparkline unavailable" aria-label="Recent trend is not available"><span>Recent trend unavailable</span></div>`;
+  }
+
+  const values = history.map(point => Number(point.value)).filter(Number.isFinite);
+  if (values.length < 2) {
+    return `<div class="resource-sparkline unavailable" aria-label="Not enough readings for a trend"><span>Not enough readings for a trend</span></div>`;
+  }
+
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const range = max - min || 1;
+  const points = values.map((value, index) => {
+    const x = (index / (values.length - 1)) * 160;
+    const y = 31 - ((value - min) / range) * 25;
+    return [x.toFixed(1), y.toFixed(1)];
+  });
+  const path = points.map(([x, y], index) => `${index === 0 ? "M" : "L"}${x},${y}`).join(" ");
+  const [lastX, lastY] = points[points.length - 1];
+
+  return `
+    <div class="resource-sparkline" aria-label="Recent readings trend, ${values.length} points">
+      <span class="sparkline-caption">Recent trend</span>
+      <svg viewBox="0 0 160 38" preserveAspectRatio="none" role="img" aria-hidden="true">
+        <path class="sparkline-track" d="M0,34 L160,34"></path>
+        <path class="sparkline-line ${statusClass}" pathLength="1" d="${path}"></path>
+        <circle class="sparkline-end ${statusClass}" cx="${lastX}" cy="${lastY}" r="2.5"></circle>
+      </svg>
+    </div>
+  `;
 }
 
 function renderResourceCards(resources) {
@@ -293,10 +367,16 @@ function renderResourceCards(resources) {
   if (!grid) return;
   grid.innerHTML = "";
 
+  if (!Array.isArray(resources) || resources.length === 0) {
+    grid.innerHTML = `<div class="empty-state">No resource telemetry is available for this facility yet.</div>`;
+    return;
+  }
+
   resources.forEach(r => {
     const meta = RESOURCE_META[r.resource_type] || { name: r.resource_type, icon: "📊" };
     const pct = Math.min(100, Math.max(0, r.utilization_pct));
     const statusClass = r.status.toLowerCase();
+    const statusText = { normal: "Plenty of room", warning: "Getting full", critical: "Nearly full" }[statusClass] || r.status;
 
     const card = document.createElement("div");
     card.className = `resource-card ${r.resource_type === state.activeResource ? "selected" : ""}`;
@@ -311,8 +391,8 @@ function renderResourceCards(resources) {
     });
 
     const daysText = r.days_to_capacity !== null 
-      ? `~${r.days_to_capacity.toFixed(0)} days to limit`
-      : "Trend stable / declining";
+      ? `About ${r.days_to_capacity.toFixed(0)} days until full`
+      : "Not expected to fill soon";
 
     card.innerHTML = `
       <div class="card-top">
@@ -320,12 +400,12 @@ function renderResourceCards(resources) {
           <span class="resource-icon">${meta.icon}</span>
           <span class="resource-name">${meta.name}</span>
         </div>
-        <span class="status-pill ${statusClass}">${r.status}</span>
+        <span class="status-pill ${statusClass}">${statusText}</span>
       </div>
 
       <div class="card-metric-block">
         <span class="metric-current">${r.current_value.toLocaleString()} <small style="font-size:0.8rem;color:var(--text-subtle);">${r.unit}</small></span>
-        <span class="metric-capacity">Limit: ${r.capacity.toLocaleString()} ${r.unit}</span>
+        <span class="metric-capacity">Full at ${r.capacity.toLocaleString()} ${r.unit}</span>
       </div>
 
       <div class="progress-container">
@@ -333,18 +413,83 @@ function renderResourceCards(resources) {
           <div class="progress-fill ${statusClass}" style="width: ${pct}%"></div>
         </div>
         <div style="display:flex;justify-content:space-between;font-size:0.75rem;color:var(--text-subtle);">
-          <span>Utilization</span>
-          <span style="font-weight:600;color:#fff;">${r.utilization_pct.toFixed(1)}%</span>
+          <span>How full</span>
+          <span style="font-weight:600;color:var(--text-main);">${r.utilization_pct.toFixed(1)}%</span>
         </div>
       </div>
 
+      ${createSparkline(r.resource_type, statusClass)}
+
       <div class="card-footer">
         <span class="days-badge ${statusClass}">${daysText}</span>
-        <span style="color:var(--color-cyan);font-weight:600;">Inspect →</span>
+        <span style="color:var(--color-cyan);font-weight:600;">See chart →</span>
       </div>
     `;
 
     grid.appendChild(card);
+  });
+}
+
+function renderResourceTable(resources) {
+  const tbody = document.getElementById("resourceTableBody");
+  if (!tbody) return;
+  tbody.innerHTML = "";
+
+  if (!Array.isArray(resources) || resources.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="5" class="resource-table-state">No resource telemetry is available for this facility yet.</td></tr>`;
+    return;
+  }
+
+  resources.forEach(resource => {
+    const meta = RESOURCE_META[resource.resource_type] || { name: resource.resource_type, icon: "📊" };
+    const statusClass = String(resource.status || "normal").toLowerCase();
+    const remaining = resource.capacity - resource.current_value;
+    const headroomText = remaining >= 0
+      ? `${remaining.toLocaleString()} ${resource.unit}`
+      : `${Math.abs(remaining).toLocaleString()} ${resource.unit} over limit`;
+    const exhaustionText = resource.days_to_capacity !== null && resource.days_to_capacity !== undefined
+      ? `About ${resource.days_to_capacity.toFixed(0)} days`
+      : "Not expected to fill soon";
+    const row = document.createElement("tr");
+    row.className = "resource-table-row";
+    row.tabIndex = 0;
+    row.setAttribute("aria-label", `View forecast for ${meta.name}`);
+    row.addEventListener("click", () => selectResourceTab(resource.resource_type));
+    row.addEventListener("keydown", event => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        selectResourceTab(resource.resource_type);
+      }
+    });
+
+    const nameCell = document.createElement("td");
+    nameCell.innerHTML = `<span class="resource-table-name"><span aria-hidden="true">${meta.icon}</span><strong></strong></span>`;
+    nameCell.querySelector("strong").textContent = meta.name;
+
+    const utilizationCell = document.createElement("td");
+    const utilization = Math.min(100, Math.max(0, resource.utilization_pct));
+    utilizationCell.innerHTML = `<div class="table-utilization"><span></span><div class="table-utilization-track"><i></i></div></div>`;
+    utilizationCell.querySelector("span").textContent = `${resource.utilization_pct.toFixed(1)}%`;
+    utilizationCell.querySelector("i").style.width = `${utilization}%`;
+
+    const headroomCell = document.createElement("td");
+    headroomCell.textContent = headroomText;
+
+    const riskCell = document.createElement("td");
+    const riskPill = document.createElement("span");
+    riskPill.className = `status-pill ${statusClass}`;
+    riskPill.textContent = {
+      normal: "Plenty of room",
+      warning: "Getting full",
+      critical: "Nearly full"
+    }[statusClass] || "Not known";
+    riskCell.appendChild(riskPill);
+
+    const exhaustionCell = document.createElement("td");
+    exhaustionCell.textContent = exhaustionText;
+
+    row.append(nameCell, utilizationCell, headroomCell, riskCell, exhaustionCell);
+    tbody.appendChild(row);
   });
 }
 
@@ -370,6 +515,7 @@ function updateSelectedCardUI(resourceType) {
 // 3. Historical Telemetry & Predictive Forecast Chart
 // --------------------------------------------------------------------------
 async function loadForecastData(resourceType, horizonDays) {
+  setChartState("loading");
   try {
     let histUrl = `/api/v1/resources/${resourceType}/history?facility_id=${encodeURIComponent(state.activeFacility)}&limit=168`;
     let foreUrl = `/api/v1/resources/${resourceType}/forecast?facility_id=${encodeURIComponent(state.activeFacility)}&days=${horizonDays}`;
@@ -388,16 +534,50 @@ async function loadForecastData(resourceType, horizonDays) {
     const historyData = await historyRes.json();
     const forecastData = await forecastRes.json();
 
+    if (!Array.isArray(historyData) || historyData.length === 0 ||
+        !forecastData || !Array.isArray(forecastData.forecast_points) ||
+        forecastData.forecast_points.length === 0) {
+      if (state.chartInstance) {
+        state.chartInstance.destroy();
+        state.chartInstance = null;
+      }
+      setChartState("empty");
+      return;
+    }
+
     renderChart(historyData, forecastData);
     renderExplainability(forecastData);
+    setChartState("ready");
   } catch (err) {
     console.error("Failed to load forecast for", resourceType, err);
+    if (state.chartInstance) {
+      state.chartInstance.destroy();
+      state.chartInstance = null;
+    }
+    setChartState("error");
+  }
+}
+
+function setChartState(status) {
+  const chartState = document.getElementById("chartState");
+  if (!chartState) return;
+
+  chartState.className = `chart-state ${status === "ready" ? "hidden" : ""}`;
+  if (status === "loading") {
+    chartState.innerHTML = `<span class="chart-state-mark" aria-hidden="true">⌁</span><strong>Loading the estimate</strong><span>Past readings and the best guess will appear here.</span>`;
+  } else if (status === "empty") {
+    chartState.innerHTML = `<span class="chart-state-mark" aria-hidden="true">⌁</span><strong>Not enough readings yet</strong><span>We need more past readings to make an estimate for this selection.</span>`;
+  } else if (status === "error") {
+    chartState.innerHTML = `<span class="chart-state-mark" aria-hidden="true">!</span><strong>Could not load the estimate</strong><span>Check that the app is running, then try again.</span>`;
   }
 }
 
 function renderChart(history, forecast) {
   const canvas = document.getElementById("forecastChart");
   if (!canvas) return;
+  if (typeof Chart === "undefined") {
+    throw new Error("Chart.js is unavailable");
+  }
   const ctx = canvas.getContext("2d");
 
   // Format labels & values
@@ -449,8 +629,8 @@ function renderChart(history, forecast) {
         {
           label: "Historical Utilization",
           data: paddedHistory,
-          borderColor: "#38bdf8",
-          backgroundColor: "rgba(56, 189, 248, 0.1)",
+          borderColor: "#0f766e",
+          backgroundColor: "rgba(15, 118, 110, 0.08)",
           borderWidth: 2,
           pointRadius: 0,
           pointHoverRadius: 4,
@@ -459,7 +639,7 @@ function renderChart(history, forecast) {
         {
           label: "Projected Trajectory",
           data: predDataset,
-          borderColor: "#f59e0b",
+          borderColor: "#2563eb",
           borderWidth: 2.5,
           borderDash: [5, 4],
           pointRadius: 0,
@@ -469,16 +649,16 @@ function renderChart(history, forecast) {
         {
           label: "Upper 95% Confidence",
           data: upperBand,
-          borderColor: "rgba(245, 158, 11, 0.4)",
+          borderColor: "rgba(37, 99, 235, 0.35)",
           borderWidth: 1,
           pointRadius: 0,
           fill: "+1", // Fill to lower band
-          backgroundColor: "rgba(245, 158, 11, 0.12)"
+          backgroundColor: "rgba(37, 99, 235, 0.1)"
         },
         {
           label: "Lower 95% Confidence",
           data: lowerBand,
-          borderColor: "rgba(245, 158, 11, 0.4)",
+          borderColor: "rgba(37, 99, 235, 0.35)",
           borderWidth: 1,
           pointRadius: 0,
           fill: false
@@ -486,7 +666,7 @@ function renderChart(history, forecast) {
         {
           label: "Rated Capacity Limit",
           data: capacityLine,
-          borderColor: "#ef4444",
+          borderColor: "#dc2626",
           borderWidth: 1.8,
           borderDash: [6, 6],
           pointRadius: 0,
@@ -497,6 +677,17 @@ function renderChart(history, forecast) {
     options: {
       responsive: true,
       maintainAspectRatio: false,
+      animation: {
+        duration: 850,
+        easing: "easeOutQuart"
+      },
+      transitions: {
+        active: {
+          animation: {
+            duration: 220
+          }
+        }
+      },
       interaction: {
         mode: "index",
         intersect: false
@@ -504,10 +695,10 @@ function renderChart(history, forecast) {
       plugins: {
         legend: { display: false },
         tooltip: {
-          backgroundColor: "#0f172a",
-          titleColor: "#f8fafc",
-          bodyColor: "#cbd5e1",
-          borderColor: "rgba(255, 255, 255, 0.15)",
+          backgroundColor: "#ffffff",
+          titleColor: "#142d4e",
+          bodyColor: "#52677e",
+          borderColor: "#e2e8f0",
           borderWidth: 1,
           padding: 10,
           displayColors: true
@@ -515,18 +706,20 @@ function renderChart(history, forecast) {
       },
       scales: {
         x: {
-          grid: { color: "rgba(255, 255, 255, 0.05)" },
+          grid: { color: "rgba(20, 45, 78, 0.08)" },
+          border: { color: "#e2e8f0" },
           ticks: {
-            color: "#64748b",
+            color: "#64788e",
             maxTicksLimit: 10,
-            font: { family: "'JetBrains Mono', monospace", size: 10 }
+            font: { family: "Inter, sans-serif", size: 11 }
           }
         },
         y: {
-          grid: { color: "rgba(255, 255, 255, 0.05)" },
+          grid: { color: "rgba(20, 45, 78, 0.08)" },
+          border: { color: "#e2e8f0" },
           ticks: {
-            color: "#64748b",
-            font: { family: "'JetBrains Mono', monospace", size: 10 }
+            color: "#64788e",
+            font: { family: "Inter, sans-serif", size: 11 }
           }
         }
       }
@@ -695,7 +888,7 @@ async function loadAlerts() {
     const alerts = await res.json();
 
     if (alerts.length === 0) {
-      container.innerHTML = `<div class="empty-state">No active capacity alerts for facility ${state.activeFacility}. All monitored subsystems operate within headroom margins.</div>`;
+      container.innerHTML = `<div class="empty-state">Nothing needs attention right now. All watched resources have room left.</div>`;
       return;
     }
 
@@ -744,7 +937,7 @@ async function loadAuditLog() {
       item.innerHTML = `
         <div>
           <span class="audit-type">${e.event_type}</span>
-          <div style="color:#cbd5e1;font-size:0.75rem;margin-top:2px;">${e.details}</div>
+          <div style="color:var(--text-muted);font-size:0.75rem;margin-top:2px;">${e.details}</div>
         </div>
         <span class="audit-time">${timeStr}</span>
       `;
@@ -871,27 +1064,33 @@ async function runWhatIfSimulation() {
 
     if (baseDaysEl) {
       baseDaysEl.textContent = data.baseline_days_to_capacity !== null 
-        ? `~${data.baseline_days_to_capacity.toFixed(1)} days` 
-        : "None (Stable)";
+        ? `About ${data.baseline_days_to_capacity.toFixed(0)} days`
+        : "Not expected to fill soon";
     }
     if (baseSlopeEl) {
-      baseSlopeEl.textContent = `${data.baseline_trend_slope_per_day >= 0 ? "+" : ""}${data.baseline_trend_slope_per_day.toFixed(2)} ${data.unit}/day · ${data.baseline_utilization_pct.toFixed(1)}% Full`;
+      baseSlopeEl.textContent = `${data.baseline_utilization_pct.toFixed(1)}% full right now`;
     }
 
     if (newDaysEl) {
       newDaysEl.textContent = data.simulated_days_to_capacity !== null 
-        ? `~${data.simulated_days_to_capacity.toFixed(1)} days` 
-        : "Averted (Headroom Safe)";
+        ? `About ${data.simulated_days_to_capacity.toFixed(0)} days`
+        : "Not expected to fill soon";
     }
     if (newSlopeEl) {
-      newSlopeEl.textContent = `${data.simulated_trend_slope_per_day >= 0 ? "+" : ""}${data.simulated_trend_slope_per_day.toFixed(2)} ${data.unit}/day · ${data.simulated_utilization_pct.toFixed(1)}% Full`;
+      newSlopeEl.textContent = `${data.simulated_utilization_pct.toFixed(1)}% full in this test`;
     }
 
     if (headlineEl) {
-      headlineEl.textContent = `Severity Impact: ${data.severity_change}`;
+      headlineEl.textContent = "What changes?";
     }
     if (descEl) {
-      descEl.textContent = `${data.urgency_impact} (Under simulated ${growthMult}x growth, ${workloadDelta >= 0 ? '+' : ''}${workloadDelta} ${data.unit} workload, and ${capacityAdj >= 0 ? '+' : ''}${capacityAdj} ${data.unit} capacity expansion).`;
+      const currentEstimate = data.baseline_days_to_capacity !== null
+        ? `about ${data.baseline_days_to_capacity.toFixed(0)} days`
+        : "not expected to fill soon";
+      const testEstimate = data.simulated_days_to_capacity !== null
+        ? `about ${data.simulated_days_to_capacity.toFixed(0)} days`
+        : "not expected to fill soon";
+      descEl.textContent = `With your changes, the estimate moves from ${currentEstimate} to ${testEstimate}. This is only a practice test.`;
     }
   } catch (err) {
     console.error("Simulation run failed:", err);
@@ -1000,12 +1199,12 @@ async function loadFacilityAssets() {
   try {
     const res = await apiFetch(`/api/v1/facilities/${encodeURIComponent(state.activeFacility)}/assets?resource_type=${encodeURIComponent(state.activeResource)}`);
     if (!res.ok) {
-      assetSelect.innerHTML = `<option value="" selected>Facility Aggregate</option>`;
+      assetSelect.innerHTML = `<option value="" selected>Whole facility</option>`;
       return;
     }
     const assets = await res.json();
 
-    assetSelect.innerHTML = `<option value="" ${state.activeAsset === "" ? "selected" : ""}>All Assets (Facility Aggregate)</option>`;
+    assetSelect.innerHTML = `<option value="" ${state.activeAsset === "" ? "selected" : ""}>Whole facility</option>`;
     assets.forEach(a => {
       const opt = document.createElement("option");
       opt.value = a.asset_id;
@@ -1015,7 +1214,7 @@ async function loadFacilityAssets() {
     });
   } catch (err) {
     console.warn("Failed to load assets:", err);
-    assetSelect.innerHTML = `<option value="" selected>Facility Aggregate</option>`;
+    assetSelect.innerHTML = `<option value="" selected>Whole facility</option>`;
   }
 }
 
@@ -1094,7 +1293,7 @@ async function handleCsvUpload() {
   formData.append("facility_id", targetFacility);
 
   submitBtn.disabled = true;
-  submitBtn.innerHTML = `<span class="btn-icon">⏳</span> Ingesting...`;
+  submitBtn.innerHTML = `<span class="btn-icon">⏳</span> Uploading...`;
 
   try {
     const res = await apiFetch("/api/v1/telemetry/import-csv", {
@@ -1112,10 +1311,10 @@ async function handleCsvUpload() {
     if (resultsContainer) resultsContainer.classList.remove("hidden");
     if (statsPills) {
       statsPills.innerHTML = `
-        <span class="stat-pill">Processed: ${data.total_rows_processed}</span>
-        <span class="stat-pill success">Imported: ${data.valid_rows_imported}</span>
-        <span class="stat-pill warning">Duplicates Skipped: ${data.duplicate_rows_skipped}</span>
-        <span class="stat-pill ${data.error_count > 0 ? 'error' : 'success'}">Errors: ${data.error_count}</span>
+        <span class="stat-pill">Rows checked: ${data.total_rows_processed}</span>
+        <span class="stat-pill success">Readings added: ${data.valid_rows_imported}</span>
+        <span class="stat-pill warning">Already had: ${data.duplicate_rows_skipped}</span>
+        <span class="stat-pill ${data.error_count > 0 ? 'error' : 'success'}">Problems: ${data.error_count}</span>
       `;
     }
 
@@ -1139,7 +1338,7 @@ async function handleCsvUpload() {
       }
     }
 
-    showToast(`Ingested ${data.valid_rows_imported} telemetry rows into SQLite!`, "info");
+    showToast(`Added ${data.valid_rows_imported} readings.`, "success");
     // Reload dashboard components
     await loadFacilities();
     await loadFacilityAssets();
@@ -1149,8 +1348,6 @@ async function handleCsvUpload() {
     showToast("Network error uploading CSV.", "error");
   } finally {
     submitBtn.disabled = false;
-    submitBtn.innerHTML = `<span class="btn-icon">⚡</span> Validate & Ingest`;
+    submitBtn.innerHTML = `<span class="btn-icon">⚡</span> Check and upload`;
   }
 }
-
-

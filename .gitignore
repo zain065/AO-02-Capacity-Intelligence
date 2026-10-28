@@ -46,3 +46,13 @@ Thumbs.db
 *.db-wal
 *.sqlite
 *.sqlite3
+
+# Downloaded raw datasets & archives
+original_downloads/
+data/original_downloads/
+*.parquet
+*.tar
+*.gz
+*.zip
+Team_Submission/
+Phase_3_Submission/

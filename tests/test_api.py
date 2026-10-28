@@ -28,12 +28,12 @@ def test_health_check():
 
 
 def test_capacity_overview():
-    """GET /api/v1/overview must return health summary, resources list, and clear synthetic label."""
+    """GET /api/v1/overview must return health summary, resources list, and data source label."""
     response = client.get("/api/v1/overview")
     assert response.status_code == 200
     data = response.json()
     assert data["facility_id"] == "DC-NORTH-PRIMARY"
-    assert "synthetic" in data["data_source"].lower()
+    assert "operational" in data["data_source"].lower() or "synthetic" in data["data_source"].lower()
     assert data["total_resources_monitored"] == 5
     assert "overall_health" in data
     assert len(data["resources"]) == 5

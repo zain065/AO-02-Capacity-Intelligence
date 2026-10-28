@@ -1,5 +1,5 @@
 {
-  "benchmark_date": "2026-10-28T14:04:13.622558+00:00",
+  "benchmark_date": "2026-10-28T22:12:56.947711+00:00",
   "total_test_scenarios": 60,
   "metrics": {
     "time_to_capacity_mae_days": 0.0,

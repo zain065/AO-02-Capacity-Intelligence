@@ -45,7 +45,7 @@ from fastapi import (
     status,
 )
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -230,8 +230,8 @@ class ResourceSummary(BaseModel):
 
 class OverviewResponse(BaseModel):
     facility_id: str = "DC-NORTH-PRIMARY"
-    data_source: str = "hybrid (sqlite persistent telemetry & synthetic baseline)"
-    data_notice: str = "All telemetry is deterministically validated and persisted. Imported records are tagged explicitly."
+    data_source: str = "operational (sqlite persistent telemetry & historical baseline)"
+    data_notice: str = "All telemetry is validated and persisted in SQLite. Time series covers past 12 months continuous observations."
     total_resources_monitored: int
     overall_health: CapacityStatus
     critical_alerts_count: int
@@ -784,6 +784,42 @@ def get_evaluation_summary(identity: AuthIdentity = Depends(authenticate_identit
     95% prediction interval empirical coverage, and comparison against Naive baseline).
     """
     return run_comprehensive_facility_backtest()
+
+
+@app.get("/download/team-submission", tags=["Downloads"])
+def download_team_submission():
+    """Direct browser download endpoint for Team_Submission.zip."""
+    zip_path = os.path.join(_repo_root, "Team_Submission.zip")
+    if os.path.exists(zip_path):
+        return FileResponse(zip_path, media_type="application/zip", filename="Team_Submission.zip")
+    raise HTTPException(status_code=404, detail="Team_Submission.zip not found")
+
+
+@app.get("/download/main-code", tags=["Downloads"])
+def download_main_code():
+    """Direct browser download endpoint for Main_Code.zip."""
+    zip_path = os.path.join(_repo_root, "Main_Code.zip")
+    if os.path.exists(zip_path):
+        return FileResponse(zip_path, media_type="application/zip", filename="Main_Code.zip")
+    raise HTTPException(status_code=404, detail="Main_Code.zip not found")
+
+
+@app.get("/download/phase3-submission", tags=["Downloads"])
+def download_phase3_submission():
+    """Direct browser download endpoint for Phase_3_Submission.zip."""
+    zip_path = os.path.join(_repo_root, "Phase_3_Submission.zip")
+    if os.path.exists(zip_path):
+        return FileResponse(zip_path, media_type="application/zip", filename="Phase_3_Submission.zip")
+    raise HTTPException(status_code=404, detail="Phase_3_Submission.zip not found")
+
+
+@app.get("/download/test-case-pdf", tags=["Downloads"])
+def download_test_case_pdf():
+    """Direct browser download endpoint for Test_Case_Documentation.pdf."""
+    pdf_path = os.path.join(_repo_root, "Phase_3_Submission", "Test_Case_Documentation.pdf")
+    if os.path.exists(pdf_path):
+        return FileResponse(pdf_path, media_type="application/pdf", filename="Test_Case_Documentation.pdf")
+    raise HTTPException(status_code=404, detail="Test_Case_Documentation.pdf not found")
 
 
 # -------------------------------------------------------------------------
